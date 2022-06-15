@@ -49,8 +49,9 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
         Setting equal to True overlays the solar limb in the map frame.
         Alternatively, set this equal to the observer of another Map to overlay
         the solar limb from that observer's perspective.
-    draw : `bool`
+    draw : `string`
         Draw allows you to draw simple shapes on the top of the figure.
+        Set draw equal to the color you would like.
     resample : `list`
         Resample will reduce the angular resolution of a map. Set this equal to
         a list of the desired resolution (e.g., [1024, 1024]). 
@@ -268,10 +269,10 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
                                      hovertemplate="HPC Lon (arcsec): %{x:.2f} <br>HPC Lat (arcsec): %{y:.2f}<extra></extra>"
                                      )
                           )
-    if draw is True:
+    if draw is not None:
         fig.update_layout(
         dragmode='drawrect',
-        newshape=dict(line_color='white'))
+        newshape=dict(line_color=draw))
         return fig.show(config={'modeBarButtonsToAdd':['drawline',
                                                 'drawopenpath',
                                                 'drawclosedpath',
