@@ -19,13 +19,12 @@ from astropy.coordinates import SkyCoord
 from astropy.visualization import AsymmetricPercentileInterval
 
 
-def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
+def plotly_map(self, clip_interval=(1, 99), color_scale=None,
                draw_grid=False, show_intensity=False, contours=None, 
-               draw_limb=None, draw=False, summary=False, resample=None,
+               draw_limb=None, draw=None, summary=False, resample=None,
                **kwargs):
     """
-    Returns a Plotly figure of a Map object. Currently, this does not work
-    with submaps (use full disk maps).
+    Returns a Plotly figure of a Map object.
 
     Parameters
     ----------
@@ -52,6 +51,9 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
     draw : `string`
         Draw allows you to draw simple shapes on the top of the figure.
         Set draw equal to the color you would like.
+    summary : `bool`
+        Summary will display an information table, taken from meta data, next
+        to a plot of the map.
     resample : `list`
         Resample will reduce the angular resolution of a map. Set this equal to
         a list of the desired resolution (e.g., [1024, 1024]). 
@@ -68,34 +70,54 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
     bs_val=True
     # binary_string = True converts the image to a png base64 string that 
     # is then traced as a black and white image. 
-    # Warning: assigning a colorscale to a large image will increase the
-    # render time.
+    # Warning: assigning a colorscale to a large image will decrease
+    # the interactive performance.
     if color_scale is not None:
         bs_val=False
     clip_interval = clip_interval*u.percent
     clip_percentages = clip_interval.to('%').value
     vmin, vmax = AsymmetricPercentileInterval(*clip_percentages).get_limits(self.data)
 
-    bx = self.bottom_left_coord.Tx.value
-    by = self.bottom_left_coord.Ty.value
-    tx = self.top_right_coord.Tx.value
-    ty = self.top_right_coord.Ty.value
+    # Build arrays for the axes depending on the type of plot.
+    coord_frame = self._coordinate_frame_name
+    helio_marker = 0
+    if coord_frame == "heliographic_stonyhurst" or coord_frame == "heliographic_carrington":
+        bx = self.bottom_left_coord.lon.deg
+        by = self.bottom_left_coord.lat.deg
+        tx = self.top_right_coord.lon.deg
+        ty = self.top_right_coord.lat.deg
 
-    scalex = (tx-bx)/self.data.shape[0]
-    scaley = (ty-by)/self.data.shape[1]
+        scalex = (tx-bx)/self.data.shape[0]
+        scaley = (ty-by)/self.data.shape[1]
 
-    Xax = np.arange(bx,tx,scalex)
-    Yax = np.arange(by,ty,scaley)
+        Xax = np.arange(bx,tx,scalex)
+        Yax = np.arange(by,ty,scaley)
+        if coord_frame == "heliographic_stonyhurst":
+            helio_marker = 1
+        if coord_frame == "heliographic_carrington":
+            helio_marker = 2
+
+    else:
+        bx = self.bottom_left_coord.Tx.value
+        by = self.bottom_left_coord.Ty.value
+        tx = self.top_right_coord.Tx.value
+        ty = self.top_right_coord.Ty.value
+
+        scalex = (tx-bx)/self.data.shape[0]
+        scaley = (ty-by)/self.data.shape[1]
+
+        Xax = np.arange(bx,tx,scalex)
+        Yax = np.arange(by,ty,scaley)
 
     # Define native frame and functions for drawing HGS grid
     native_frame = self.center.frame
     rsun = self.center.rsun
-    reference_dist = np.sqrt(self.center.frame.observer.radius**2 - rsun**2)
-
+    
     # Resolution of the HGS grid lines
     resolution = 200
 
     def meridian(deg):
+        reference_dist = np.sqrt(self.observer_coordinate.radius**2 - rsun**2)
         lon = SkyCoord(np.ones(resolution) * deg*u.deg, 
                        np.linspace(-90, 90, resolution) * u.deg, 
                        frame=frames.HeliographicStonyhurst)
@@ -112,6 +134,7 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
         return lonHPC, lon_data
     
     def parallel(deg):
+        reference_dist = np.sqrt(self.observer_coordinate.radius**2 - rsun**2)
         lat = SkyCoord(np.linspace(-90, 90, resolution) * u.deg, 
                        np.ones(resolution) * deg*u.deg, 
                        frame=frames.HeliographicStonyhurst)
@@ -129,9 +152,11 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
    
     name = r'{} {} {}'.format(self.detector, self.wavelength,
                               self.date.value.replace('T',' '))
+
+    # Plot settings for the summary view
     if summary is True:
         # Note that subplots specs requires the plot type to be image
-        # not imshow. Imshow uses the underlying Image and Heatmap
+        # not imshow. Imshow uses the underlying Image or Heatmap
         # classes of Graph Objects.
         fig = make_subplots(rows=1, cols=2, shared_xaxes=False,
                             specs=[[{"type": "table"},
@@ -144,7 +169,8 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
         wave = 'Unknown' if wave is None else wave
         measurement = 'Unknown' if measurement is None else measurement
         TIME_FORMAT = config.get("general", "time_format")
-        
+
+        # Build the table of Map information
         fig.add_trace(
             go.Table(
                 cells=dict(
@@ -191,6 +217,24 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
         fig.update_xaxes(col=2, title='Helioprojective Longitude (arcsec)')
         fig.update_yaxes(col=2, title='Helioprojective Latitude (arcsec)',
                          autorange=True)
+
+    # Plot settings if it is a heliographic map
+    elif helio_marker == 1 or helio_marker == 2:
+        if helio_marker == 1:
+            ref_sys = "HGS"
+        if helio_marker == 2:
+            ref_sys = "HGC"
+        fig = px.imshow(self.data,
+                        zmin=vmin, zmax=vmax,
+                        binary_string=bs_val,
+                        color_continuous_scale=color_scale,
+                        labels={'x':f'{ref_sys} Longitude (pixels)',
+                                'y':f'{ref_sys} Latitude (pixels)'},
+                        title=name, origin='lower', **kwargs)
+        fig.update_layout(coloraxis_showscale=False, height=600, width=800)
+        fig.update_traces(hovertemplate="HG Longitude (pixels): %{x:.2f} <br> HG Latitude (pixels): %{y:.2f} <extra></extra>")
+
+    # Default plot settings
     else:
         fig = px.imshow(self.data, x=Xax, y=Yax,
                         zmin=vmin, zmax=vmax,
@@ -201,8 +245,12 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
                         title=name, origin='lower', **kwargs)
         fig.update_layout(coloraxis_showscale=False, height=600, width=600)
         fig.update_traces(hovertemplate="HPC Longitude (arcsec): %{x:.2f} <br> HPC Latitude (arcsec): %{y:.2f} <extra></extra>")
-    
+
+    # Below are plot settings for optional arguments
+
     if draw_grid is True:
+        # Lines is the list of HGS gridlines (degrees) that will be drawn.
+        # If you would like more/different lines displayed, add them here.
         lines = np.array([-90, -70, -50, -37.5, -25, -12.5, 0,
                           12.5, 25, 37.5, 50, 70, 90])
         for i in lines:
@@ -222,13 +270,12 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
                                      line=dict(color='white', width=width), 
                                      opacity=opacity, customdata=lat_cdata, 
                                      hovertemplate="HPC (arcsec): (%{x:.2f}, %{y:.2f}) <br> HGS (deg): %{customdata[0]} <br> HGC (deg): %{customdata[1]} <extra></extra>"))
-    fig.update_layout(showlegend=False)
     if show_intensity is True:
         intense = self.data
         fig.update(data=[{'customdata': intense,
                           'hovertemplate': "HPC Lon (arcsec): %{x:.2f} <br>HPC Lat (arcsec): %{y:.2f} <br>intensity: %{customdata:.2f} <extra></extra>"}])
     if contours is not None:
-        contour = self.contour(contours * u.ct)
+        contour = self.contour(contours * self.unit)
         for coords in contour:
             fig.add_trace(go.Scatter(x=coords.Tx.value, y=coords.Ty.value,
                                      mode='lines',
@@ -236,7 +283,7 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
                                      showlegend=False))
     if draw_limb is not None:
         if draw_limb is True:
-            observer = self.center.observer
+            observer = self.observer_coordinate
             limb = get_limb_coordinates(observer,
                                         self.center.rsun, 200)
             limb = limb.transform_to(native_frame)
@@ -280,9 +327,10 @@ def plotly_map(self, clip_interval=(1, 99.5), color_scale=None,
                                                 'drawrect',
                                                 'eraseshape'
                                                ]})
+    fig.update_layout(showlegend=False)
     return fig.show()
 
-def plotly_ts(self, gradient=False, peaks=None, **kwargs):
+def plotly_ts(self, gradient=False, peaks=None, power_spec=None, **kwargs):
     """
     A Plotly figure of each channel in the TimeSeries object.
 
@@ -293,13 +341,21 @@ def plotly_ts(self, gradient=False, peaks=None, **kwargs):
     peaks : `float`
         Activates the findpeaks function. You must set it
         equal to the DELTA value.
+    power_spec : `float`
+        Uses Scipy's periodogram function to calculate the power spectrum
+        for each channel. Set it equal to the sampling frequency.
 
     Returns
     -------
     plotly figure object
     """
+    # Write timeseries data to a data frame
     dat = self.to_dataframe()
     channels = self.columns
+
+    # Initialize the figure, then draw the plots.
+    # Each type of plot is drawn using a Scatter type of trace.
+    # The plotting here is kept separate since the types of units can change.
     fig = go.Figure()
     if peaks is not None:
         for i in channels:
@@ -354,6 +410,21 @@ def plotly_ts(self, gradient=False, peaks=None, **kwargs):
         fig.update_layout(yaxis_exponentformat="power",
                           hovermode="x")
         return fig.show()
+    elif power_spec is not None:
+        from scipy import signal
+        samp_freq = power_spec
+        for i in channels:
+            freq, spectrum = signal.periodogram(dat[i].values, samp_freq)
+            fig.add_trace(go.Scatter(x=freq, y=spectrum, name=i, **kwargs))
+        unit = self.units[channels[0]]
+        fig.update_yaxes(type="log",
+                         title="{:LaTeX}".format(unit**2/u.Hz))
+        fig.update_xaxes(title="Frequency [Hz]")
+        fig.update_layout(yaxis_dtick="1", yaxis_exponentformat="power",
+                          hovermode="x")
+        return fig.show()
+
+    # Default plot settings
     else:
         for i in channels:
             fig.add_trace(
@@ -460,8 +531,8 @@ def ts_summary(self):
             row=1,
             col=2,
         )
-        # Custom bin sizing slows down plotly's renderer a lot.
-        # So, datasets with over 10 channels are set to use plotly's
+        # Custom bin sizing slows down interactivity.
+        # So, datasets with over 10 channels are set to use Plotly's
         # default bin algorithm, which renders faster.
         if len(self.columns) < 10:
             binsize = astropy.stats.scott_bin_width(dat[channels[i]].values)
@@ -479,6 +550,8 @@ def ts_summary(self):
             row=2,
             col=2,
         )
+    # Initialize the dropdown Menu, then adjust update settings so both
+    # the plot and axes titles change (e.g., if different units are used).
     Menu = []
     for i in range(len(channels)):
         Menu.append(
@@ -507,6 +580,7 @@ def ts_summary(self):
             )
         ]
     )
+    # Add the table (as another trace) to the subplot.
     fig.add_trace(
         go.Table(
             cells=dict(
